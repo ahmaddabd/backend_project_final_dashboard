@@ -1,48 +1,119 @@
-import { Controller, Post, Body, Request, UseGuards } from '@nestjs/common';
-import { AuthService } from '../services/auth.service';
-import { JwtAuthGuard } from '../guards/jwt-auth.guard';
-import { LocalAuthGuard } from '../guards/local-auth.guard';
-import { RegisterDto } from '../dto/register.dto';
-import { LoginDto } from '../dto/login.dto';
-import { RefreshTokenDto } from '../dto/refresh-token.dto';
-import * as rateLimit from 'express-rate-limit';
+// src/interface/http/controllers/auth.controller.ts
+import {
+  Controller,
+  Post,
+  Body,
+  UseGuards,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Req,
+} from "@nestjs/common";
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from "@nestjs/swagger";
+import { AuthService } from "@application/auth/services/auth.service";
+import { LocalAuthGuard } from "@application/auth/guards/local-auth.guard";
+import { JwtAuthGuard } from "@application/auth/guards/jwt-auth.guard";
+import { RegisterDto } from "@application/auth/dto/register.dto";
+import { LoginDto } from "@application/auth/dto/login.dto";
+import { RefreshTokenDto } from "@application/auth/dto/refresh-token.dto";
+import { Public } from "@application/auth/decorators/public.decorator";
+import { CurrentUser } from "@application/auth/decorators/current-user.decorator";
+import { UserEntity } from "@domain/entities/user.entity";
+import { Request } from 'express';
 
-const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5, // يسمح بـ 5 محاولات فقط خلال 15 دقيقة
-  message: 'Too many login attempts. Please try again later.'
-});
-
-@Controller('auth')
+@ApiTags("auth")
+@Controller("auth")
 export class AuthController {
-  constructor(private authService: AuthService) {}
+  constructor(private readonly authService: AuthService) {}
 
-  @Post('register')
+  @Public()
+  @Post("register")
+  @ApiOperation({ summary: "Register a new user" })
+  @ApiResponse({
+    status: HttpStatus.CREATED,
+    description: "User successfully registered",
+  })
+  @ApiResponse({ status: HttpStatus.CONFLICT, description: "User already exists" })
   async register(@Body() registerDto: RegisterDto) {
-    return this.authService.register(registerDto);
+    return await this.authService.register(registerDto);
   }
 
+  @Public()
   @UseGuards(LocalAuthGuard)
-  @Post('login')
-  @UseGuards(loginLimiter)
-  async login(@Request() req) {
-    return this.authService.login(req.user);
+  @Post("login")
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: "Login user" })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: "User successfully logged in",
+      schema: {
+          type: 'object',
+          properties: {
+              accessToken: { type: 'string' },
+              refreshToken: { type: 'string' },
+              user: { type: 'object' } //  add user details
+          }
+      }
+  })
+  @ApiResponse({
+    status: HttpStatus.UNAUTHORIZED,
+    description: "Invalid credentials",
+  })
+  async login(@Body() loginDto: LoginDto, @Req() req: Request) {
+      return await this.authService.login(loginDto);
   }
 
+  @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)
-  @Post('profile')
-  getProfile(@Request() req) {
-    return req.user;
-  }
-
-  @Post('refresh')
+  @Post("refresh")
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: "Refresh access token" })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: "Token successfully refreshed",
+      schema: {
+          type: 'object',
+          properties: {
+              accessToken: {type: 'string'}
+          }
+      }
+  })
+  @ApiResponse({
+    status: HttpStatus.UNAUTHORIZED,
+    description: "Invalid refresh token",
+  })
   async refreshToken(@Body() refreshTokenDto: RefreshTokenDto) {
-    return this.authService.refreshAccessToken(refreshTokenDto.refreshToken);
+    return await this.authService.refreshAccessToken(refreshTokenDto.refreshToken);
   }
 
+  @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)
-  @Post('logout')
-  async logout(@Request() req) {
-    return this.authService.logout(req.headers.authorization.split(' ')[1]);
+  @Post("logout")
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: "Logout user" })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: "User successfully logged out",
+  })
+  async logout(@Req() req: Request) {
+      const authHeader = req.headers.authorization;
+    if (!authHeader) {
+      return { message: "Already logged out" }; // Or throw an exception if you prefer
+    }
+    const accessToken = authHeader.split(" ")[1]; // Assuming "Bearer <token>"
+    await this.authService.logout(accessToken);
+    return { message: "Successfully logged out" };
+  }
+
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @Get("profile")
+  @ApiOperation({ summary: "Get user profile" })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: "User profile retrieved successfully",
+  })
+  getProfile(@CurrentUser() user: UserEntity) {
+    return user;
   }
 }
